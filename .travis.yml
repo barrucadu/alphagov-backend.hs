@@ -1,0 +1,22 @@
+sudo: false
+
+language: c
+
+cache:
+  directories:
+  - $HOME/.ghc
+  - $HOME/.cabal
+  - $HOME/.stack
+
+addons:
+  apt:
+    packages:
+    - libgmp-dev
+
+script:
+- ./.travis/$MODE.sh
+
+jobs:
+  include:
+  - env: MODE=lint
+  - env: MODE=test
