@@ -4,6 +4,9 @@ packages:
 - example
 - gds-api
 
+extra-deps:
+- servant-multipart-0.11.2
+
 nix:
   packages:
   - zlib

@@ -4,8 +4,11 @@ version: 0.1.0.0
 dependencies:
 - base >= 4.7 && < 5
 - aeson
+- http-types
 - servant
 - servant-client
+- servant-multipart
+- unordered-containers
 - uuid-types
 
 ghc-options:
