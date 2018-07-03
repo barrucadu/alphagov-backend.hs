@@ -1,0 +1,16 @@
+name: gds-api
+version: 0.1.0.0
+
+dependencies:
+- base >= 4.7 && < 5
+- aeson
+- servant
+- servant-client
+- uuid-types
+
+ghc-options:
+- -Wall
+- -Werror
+
+library:
+  source-dirs: lib
