@@ -1,0 +1,39 @@
+name: asset-manager
+version: 0.1.0.0
+
+dependencies:
+- base >= 4.7 && < 5
+- aeson
+- gds-api
+- servant
+- servant-multipart
+- servant-server
+- uuid-types
+
+ghc-options:
+- -threaded
+- -rtsopts
+- -with-rtsopts=-N
+- -Wall
+- -Werror
+
+library:
+  source-dirs: lib
+  dependencies:
+    - http-types
+    - wai
+
+executables:
+  asset-manager:
+    main: Main.hs
+    source-dirs: server
+    dependencies:
+    - asset-manager
+    - wai-extra
+    - warp
+
+  asset-manager-test:
+    main: Main.hs
+    source-dirs: test
+    dependencies:
+    - asset-manager
