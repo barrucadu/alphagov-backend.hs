@@ -4,17 +4,22 @@
 -- | The asset-manager service.
 module GDS.AssetManager where
 
+import           Control.Monad             (unless)
 import           Control.Monad.IO.Class
 import           Data.Aeson                (Value)
 import           Data.String               (fromString)
 import qualified Data.Text                 as T
 import           Data.UUID.Types           (UUID)
+import qualified Data.UUID.Types           as UUID
+import qualified Data.UUID.V4              as UUID
 import qualified Database.MongoDB          as MongoDB
 import qualified Network.HTTP.Types.Status as HTTP
 import           Network.Wai               (responseLBS)
 import           Servant
 import           Servant.Multipart         (FileData, MultipartData, Tmp)
 import qualified Servant.Multipart         as MP
+import           System.Directory          (copyFile, createDirectoryIfMissing)
+import           System.FilePath           (FilePath, takeDirectory, (</>))
 
 import qualified GDS.API.AssetManager      as GDS
 
@@ -48,7 +53,9 @@ upload
   -> MultipartData Tmp
   -> Handler Value
 upload _ multipartData = do
-  _ <- requireFile "asset[file]" multipartData
+  file <- requireFile "asset[file]" multipartData
+  uuid <- liftIO UUID.nextRandom
+  saveFileTo (uploadsBase </> UUID.toString uuid) file
   throwError err501
 
 -- | Update an asset.
@@ -83,8 +90,11 @@ uploadWhitehall
   -> MultipartData Tmp
   -> Handler Value
 uploadWhitehall _ multipartData = do
-  _ <- requireInput "asset[legacy_url_path]" multipartData
-  _ <- requireFile "asset[file]" multipartData
+  legacyUrlPath <- requireInput "asset[legacy_url_path]" multipartData
+  file          <- requireFile "asset[file]" multipartData
+  unless (take 1 legacyUrlPath == "/")
+         (badParams "legacy url path should start with '/'")
+  saveFileTo (uploadsBase </> tail (takeDirectory legacyUrlPath)) file
   throwError err501
 
 -- | Get the JSON representation of a whitehall asset.
@@ -101,6 +111,17 @@ downloadWhitehall _ _ = Tagged $ \_ respond ->
 -- | Check the health of the application.
 healthcheck :: Handler Value
 healthcheck = throwError err501
+
+
+-------------------------------------------------------------------------------
+-- * File uploads
+
+-- | Save a file to a directory, keeping its name.
+saveFileTo :: MonadIO m => FilePath -> FileData Tmp -> m ()
+saveFileTo directory file = liftIO $ do
+  let destination = directory </> T.unpack (MP.fdFileName file)
+  createDirectoryIfMissing True                directory
+  copyFile                 (MP.fdPayload file) destination
 
 
 -------------------------------------------------------------------------------
@@ -128,6 +149,13 @@ findFile = MP.lookupFile . fromString
 
 -- | Throw a 422 if a 'Maybe' value isn't present.
 require :: String -> Maybe a -> Handler a
-require msg = maybe (throwError err) pure
- where
-  err = err422 { errBody = fromString ("{ errors: [\"" ++ msg ++ "\"] }") }
+require msg = maybe (badParams msg) pure
+
+-- | Throw a 422 with the given error.
+badParams :: String -> Handler a
+badParams msg =
+  throwError err422 { errBody = fromString ("{ errors: [\"" ++ msg ++ "\"] }") }
+
+-- | Base directory for uploads.
+uploadsBase :: FilePath
+uploadsBase = "/tmp/asset-manager-uploads"

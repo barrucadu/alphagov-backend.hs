@@ -21,8 +21,11 @@ ghc-options:
 library:
   source-dirs: lib
   dependencies:
+    - directory
+    - filepath
     - http-types
     - text
+    - uuid
     - wai
 
 executables:
