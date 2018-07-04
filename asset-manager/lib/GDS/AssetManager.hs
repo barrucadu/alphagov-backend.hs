@@ -18,13 +18,15 @@ import qualified Data.UUID.V4              as UUID
 import           Database.MongoDB          ((=:))
 import qualified Database.MongoDB          as MongoDB
 import           GHC.Generics              (Generic)
+import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.HTTP.Types.Status as HTTP
-import           Network.Wai               (responseLBS)
+import           Network.Mime              (defaultMimeLookup)
+import           Network.Wai               (responseFile, responseLBS)
 import           Servant
 import           Servant.Multipart         (FileData, MultipartData, Tmp)
 import qualified Servant.Multipart         as MP
 import           System.Directory          (copyFile, createDirectoryIfMissing)
-import           System.FilePath           (FilePath, (</>))
+import           System.FilePath           (FilePath, joinPath, takeDirectory)
 
 import qualified GDS.API.AssetManager      as GDS
 
@@ -86,8 +88,7 @@ restore _ _ = throwError err501
 -- | Download an asset.
 download
   :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> String -> Server Raw
-download _ _ _ = Tagged $ \_ respond ->
-  respond $ responseLBS HTTP.notImplemented501 [] "not implemented"
+download runMongo uuid _ = serveAssetFromDisk runMongo ["uuid" =: toUUID uuid]
 
 -- | Upload a new whitehall asset.
 uploadWhitehall
@@ -111,8 +112,9 @@ retrieveWhitehall _ _ = throwError err501
 -- | Download a whitehall asset.
 downloadWhitehall
   :: (forall m a . MonadIO m => RunMongo m a) -> [String] -> Server Raw
-downloadWhitehall _ _ = Tagged $ \_ respond ->
-  respond $ responseLBS HTTP.notImplemented501 [] "not implemented"
+downloadWhitehall runMongo segments = serveAssetFromDisk
+  runMongo
+  ["legacy_url_path" =: joinPath ("/" : "government" : "uploads" : segments)]
 
 -- | Check the health of the application.
 healthcheck :: Handler Value
@@ -185,10 +187,26 @@ saveAsset file asset = do
 -- | Save an asset's file to disk.
 saveAssetToDisk :: MonadIO m => FileData Tmp -> Asset -> m ()
 saveAssetToDisk file asset = liftIO $ do
-  let directory   = uploadsBase </> UUID.toString (assetUUID asset)
-  let destination = directory </> T.unpack (MP.fdFileName file)
+  let destination = assetFilePath asset
+  let directory   = takeDirectory destination
   createDirectoryIfMissing True                directory
   copyFile                 (MP.fdPayload file) destination
+
+-- | Look up an asset and serve its file from disk.
+serveAssetFromDisk
+  :: (forall m a . MonadIO m => RunMongo m a) -> MongoDB.Selector -> Server Raw
+serveAssetFromDisk runMongo sel = Tagged $ \_ respond -> do
+  masset <- runMongo (findAssetInMongo sel)
+  respond $ case masset of
+    -- todo: access control
+    Just asset -> responseFile
+      HTTP.ok200
+      [(HTTP.hContentType, defaultMimeLookup (fromString (assetFile asset)))]
+      (assetFilePath asset)
+      Nothing
+    Nothing -> responseLBS HTTP.notFound404
+                           [(HTTP.hContentType, "application/json")]
+                           "{ \"status\": \"not found\" }"
 
 -- | Save an asset's data to mongo.
 saveAssetToMongo :: MonadIO m => Asset -> MongoDB.Action m ()
@@ -206,10 +224,29 @@ saveAssetToMongo asset = MongoDB.insert_
   , "redirect_url" =: assetRedirectUrl asset
   , "legacy_url_path" =: assetLegacyUrlPath asset
   ]
-  where
-    -- holy type conversion, batman!  maybe I should be using the
-    -- MongoDB UUID type, rather than the uuid-types UUID type.
-        toUUID = MongoDB.UUID . UUID.toASCIIBytes
+
+-- | Find an asset by selector.
+findAssetInMongo
+  :: MonadIO m => MongoDB.Selector -> MongoDB.Action m (Maybe Asset)
+findAssetInMongo sel = do
+  doc <- MongoDB.findOne (MongoDB.select sel mongoCollection)
+  pure (toAsset =<< doc)
+ where
+  toAsset doc =
+    Asset
+      <$> (fromUUID =<< MongoDB.lookup "uuid" doc)
+      <*> (T.unpack <$> MongoDB.lookup "file" doc)
+      <*> MongoDB.lookup "created_at" doc
+      <*> MongoDB.lookup "updated_at" doc
+      <*> pure (MongoDB.lookup "deleted_at" doc)
+      <*> pure (fromUUID =<< MongoDB.lookup "replacement_uuid" doc)
+      <*> pure (MongoDB.lookup "redirect_url" doc)
+      <*> pure (MongoDB.lookup "legacy_url_path" doc)
+
+-- | Get the path of an asset on disk.
+assetFilePath :: Asset -> FilePath
+assetFilePath asset =
+  joinPath [uploadsBase, UUID.toString (assetUUID asset), assetFile asset]
 
 
 -------------------------------------------------------------------------------
@@ -241,8 +278,9 @@ require msg = maybe (badParams msg) pure
 
 -- | Throw a 422 with the given error.
 badParams :: String -> Handler a
-badParams msg =
-  throwError err422 { errBody = fromString ("{ \"errors\": [\"" ++ msg ++ "\"] }") }
+badParams msg = throwError err422
+  { errBody = fromString ("{ \"errors\": [\"" ++ msg ++ "\"] }")
+  }
 
 -- | Base directory for uploads.
 uploadsBase :: FilePath
@@ -251,3 +289,11 @@ uploadsBase = "/tmp/asset-manager-uploads"
 -- | MongoDB collection name.
 mongoCollection :: MongoDB.Collection
 mongoCollection = "assets"
+
+-- holy type conversion, batman!  maybe I should be using the MongoDB
+-- UUID type, rather than the uuid-types UUID type.
+toUUID :: UUID -> MongoDB.UUID
+toUUID = MongoDB.UUID . UUID.toASCIIBytes
+
+fromUUID :: MongoDB.UUID -> Maybe UUID
+fromUUID (MongoDB.UUID uuid) = UUID.fromASCIIBytes uuid

@@ -24,6 +24,7 @@ library:
     - directory
     - filepath
     - http-types
+    - mime-types
     - text
     - time
     - uuid
