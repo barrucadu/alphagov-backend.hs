@@ -21,6 +21,7 @@ library:
   source-dirs: lib
   dependencies:
     - http-types
+    - text
     - wai
 
 executables:
