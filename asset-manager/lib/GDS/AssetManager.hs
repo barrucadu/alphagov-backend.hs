@@ -1,12 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes        #-}
 
 -- | The asset-manager service.
 module GDS.AssetManager where
 
+import           Control.Monad.IO.Class
 import           Data.Aeson                (Value)
 import           Data.String               (fromString)
 import qualified Data.Text                 as T
 import           Data.UUID.Types           (UUID)
+import qualified Database.MongoDB          as MongoDB
 import qualified Network.HTTP.Types.Status as HTTP
 import           Network.Wai               (responseLBS)
 import           Servant
@@ -19,18 +22,20 @@ import qualified GDS.API.AssetManager      as GDS
 -------------------------------------------------------------------------------
 -- * API server
 
+type RunMongo m a = MongoDB.Action m a -> m a
+
 -- | The API server.
-server :: Server GDS.API
-server =
-  upload
-    :<|> update
-    :<|> uploadWhitehall
-    :<|> retrieve
-    :<|> delete
-    :<|> restore
-    :<|> download
-    :<|> retrieveWhitehall
-    :<|> downloadWhitehall
+server :: (forall m a . MonadIO m => RunMongo m a) -> Server GDS.API
+server runMongo =
+  upload runMongo
+    :<|> update runMongo
+    :<|> uploadWhitehall runMongo
+    :<|> retrieve runMongo
+    :<|> delete runMongo
+    :<|> restore runMongo
+    :<|> download runMongo
+    :<|> retrieveWhitehall runMongo
+    :<|> downloadWhitehall runMongo
     :<|> healthcheck
 
 
@@ -38,46 +43,59 @@ server =
 -- * Handlers
 
 -- | Upload a new asset.
-upload :: MultipartData Tmp -> Handler Value
-upload multipartData = do
+upload
+  :: (forall m a . MonadIO m => RunMongo m a)
+  -> MultipartData Tmp
+  -> Handler Value
+upload _ multipartData = do
   _ <- requireFile "asset[file]" multipartData
   throwError err501
 
 -- | Update an asset.
-update :: UUID -> MultipartData Tmp -> Handler Value
-update _ _ = throwError err501
+update
+  :: (forall m a . MonadIO m => RunMongo m a)
+  -> UUID
+  -> MultipartData Tmp
+  -> Handler Value
+update _ _ _ = throwError err501
 
 -- | Get the JSON representation of an asset.
-retrieve :: UUID -> Handler Value
-retrieve _ = throwError err501
+retrieve :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
+retrieve _ _ = throwError err501
 
 -- | Delete an asset.
-delete :: UUID -> Handler Value
-delete _ = throwError err501
+delete :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
+delete _ _ = throwError err501
 
 -- | Restore a deleted asset.
-restore :: UUID -> Handler Value
-restore _ = throwError err501
+restore :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
+restore _ _ = throwError err501
 
 -- | Download an asset.
-download :: UUID -> String -> Server Raw
-download _ _ = Tagged $ \_ respond ->
+download
+  :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> String -> Server Raw
+download _ _ _ = Tagged $ \_ respond ->
   respond $ responseLBS HTTP.notImplemented501 [] "not implemented"
 
 -- | Upload a new whitehall asset.
-uploadWhitehall :: MultipartData Tmp -> Handler Value
-uploadWhitehall multipartData = do
+uploadWhitehall
+  :: (forall m a . MonadIO m => RunMongo m a)
+  -> MultipartData Tmp
+  -> Handler Value
+uploadWhitehall _ multipartData = do
   _ <- requireInput "asset[legacy_url_path]" multipartData
   _ <- requireFile "asset[file]" multipartData
   throwError err501
 
 -- | Get the JSON representation of a whitehall asset.
-retrieveWhitehall :: [String] -> Handler Value
-retrieveWhitehall _ = throwError err501
+retrieveWhitehall
+  :: (forall m a . MonadIO m => RunMongo m a) -> [String] -> Handler Value
+retrieveWhitehall _ _ = throwError err501
 
 -- | Download a whitehall asset.
-downloadWhitehall :: [String] -> Server Raw
-downloadWhitehall _ = Tagged $ \_ respond ->
+downloadWhitehall
+  :: (forall m a . MonadIO m => RunMongo m a) -> [String] -> Server Raw
+downloadWhitehall _ _ = Tagged $ \_ respond ->
   respond $ responseLBS HTTP.notImplemented501 [] "not implemented"
 
 -- | Check the health of the application.
