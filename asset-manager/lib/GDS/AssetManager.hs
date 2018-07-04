@@ -242,7 +242,7 @@ require msg = maybe (badParams msg) pure
 -- | Throw a 422 with the given error.
 badParams :: String -> Handler a
 badParams msg =
-  throwError err422 { errBody = fromString ("{ errors: [\"" ++ msg ++ "\"] }") }
+  throwError err422 { errBody = fromString ("{ \"errors\": [\"" ++ msg ++ "\"] }") }
 
 -- | Base directory for uploads.
 uploadsBase :: FilePath
