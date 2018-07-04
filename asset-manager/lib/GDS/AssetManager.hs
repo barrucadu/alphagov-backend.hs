@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes        #-}
 
@@ -6,13 +7,16 @@ module GDS.AssetManager where
 
 import           Control.Monad             (unless)
 import           Control.Monad.IO.Class
-import           Data.Aeson                (Value)
+import           Data.Aeson                (ToJSON, Value, toJSON)
+import qualified Data.Aeson                as A
 import           Data.String               (fromString)
 import qualified Data.Text                 as T
+import           Data.Time.Clock           (UTCTime, getCurrentTime)
 import           Data.UUID.Types           (UUID)
 import qualified Data.UUID.Types           as UUID
 import qualified Data.UUID.V4              as UUID
 import qualified Database.MongoDB          as MongoDB
+import           GHC.Generics              (Generic)
 import qualified Network.HTTP.Types.Status as HTTP
 import           Network.Wai               (responseLBS)
 import           Servant
@@ -53,10 +57,10 @@ upload
   -> MultipartData Tmp
   -> Handler Value
 upload _ multipartData = do
-  file <- requireFile "asset[file]" multipartData
-  uuid <- liftIO UUID.nextRandom
-  saveFileTo (uploadsBase </> UUID.toString uuid) file
-  throwError err501
+  file  <- requireFile "asset[file]" multipartData
+  asset <- makeAsset file Nothing multipartData
+  saveFileTo (uploadsBase </> UUID.toString (assetUUID asset)) file
+  pure (toJSON asset)
 
 -- | Update an asset.
 update
@@ -94,8 +98,9 @@ uploadWhitehall _ multipartData = do
   file          <- requireFile "asset[file]" multipartData
   unless (take 1 legacyUrlPath == "/")
          (badParams "legacy url path should start with '/'")
+  asset <- makeAsset file (Just legacyUrlPath) multipartData
   saveFileTo (uploadsBase </> tail (takeDirectory legacyUrlPath)) file
-  throwError err501
+  pure (toJSON asset)
 
 -- | Get the JSON representation of a whitehall asset.
 retrieveWhitehall
@@ -111,6 +116,64 @@ downloadWhitehall _ _ = Tagged $ \_ respond ->
 -- | Check the health of the application.
 healthcheck :: Handler Value
 healthcheck = throwError err501
+
+
+-------------------------------------------------------------------------------
+-- * Assets
+
+-- | An asset: either normal or whitehall.
+--
+-- Doesn't currently have: state, filename history, draft, etag, last
+-- modified (what's the difference between that and updated?), md5
+-- digest, size, access limited, parent document url.
+--
+-- Whitehall assets don't currently have: legacy etag, legacy last
+-- modified.
+data Asset = Asset
+  { assetUUID          :: UUID
+  , assetFile          :: FilePath
+  -- ^ Just the name, not the full path.
+  , assetCreatedAt     :: UTCTime
+  , assetUpdatedAt     :: UTCTime
+  -- ^ On creation, this is the created time.
+  , assetDeletedAt     :: Maybe UTCTime
+  , assetReplacement   :: Maybe UUID
+  , assetRedirectUrl   :: Maybe String
+  , assetLegacyUrlPath :: Maybe String
+  -- ^ If this is present, it's a whitehall asset.
+  } deriving (Eq, Ord, Read, Show, Generic)
+
+instance ToJSON Asset where
+  toJSON     = A.genericToJSON assetJsonOptions
+  toEncoding = A.genericToEncoding assetJsonOptions
+
+-- | Strip the \"asset\" prefix and turn CamelCase into snake_case.
+assetJsonOptions :: A.Options
+assetJsonOptions = A.defaultOptions
+  { A.fieldLabelModifier = A.camelTo2 '_' . drop (length ("asset" :: String))
+  }
+
+-- | Make an asset, loading the replacement and redirect URL from the
+-- given @MultipartData@.
+--
+-- The UUID is randomly generated.  Creation and update times are set
+-- to now.
+makeAsset
+  :: MonadIO m => FileData tag -> Maybe FilePath -> MultipartData tag -> m Asset
+makeAsset file legacyUrlPath multipartData = liftIO $ do
+  uuid <- UUID.nextRandom
+  now  <- getCurrentTime
+  pure Asset
+    { assetUUID          = uuid
+    , assetFile          = T.unpack (MP.fdFileName file)
+    , assetCreatedAt     = now
+    , assetUpdatedAt     = now
+    , assetDeletedAt     = Nothing
+    , assetReplacement   = UUID.fromString
+      =<< findInput "asset[replacement_id]" multipartData
+    , assetRedirectUrl   = findInput "asset[redirect_url]" multipartData
+    , assetLegacyUrlPath = legacyUrlPath
+    }
 
 
 -------------------------------------------------------------------------------

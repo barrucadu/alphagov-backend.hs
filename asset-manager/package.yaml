@@ -25,6 +25,7 @@ library:
     - filepath
     - http-types
     - text
+    - time
     - uuid
     - wai
 
