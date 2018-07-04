@@ -15,6 +15,7 @@ import           Data.Time.Clock           (UTCTime, getCurrentTime)
 import           Data.UUID.Types           (UUID)
 import qualified Data.UUID.Types           as UUID
 import qualified Data.UUID.V4              as UUID
+import           Database.MongoDB          ((=:))
 import qualified Database.MongoDB          as MongoDB
 import           GHC.Generics              (Generic)
 import qualified Network.HTTP.Types.Status as HTTP
@@ -56,10 +57,10 @@ upload
   :: (forall m a . MonadIO m => RunMongo m a)
   -> MultipartData Tmp
   -> Handler Value
-upload _ multipartData = do
+upload runMongo multipartData = do
   file  <- requireFile "asset[file]" multipartData
   asset <- makeAsset file Nothing multipartData
-  saveAsset file asset
+  runMongo (saveAsset file asset)
   pure (toJSON asset)
 
 -- | Update an asset.
@@ -93,13 +94,13 @@ uploadWhitehall
   :: (forall m a . MonadIO m => RunMongo m a)
   -> MultipartData Tmp
   -> Handler Value
-uploadWhitehall _ multipartData = do
+uploadWhitehall runMongo multipartData = do
   legacyUrlPath <- requireInput "asset[legacy_url_path]" multipartData
   file          <- requireFile "asset[file]" multipartData
   unless (take 1 legacyUrlPath == "/")
          (badParams "legacy url path should start with '/'")
   asset <- makeAsset file (Just legacyUrlPath) multipartData
-  saveAsset file asset
+  runMongo (saveAsset file asset)
   pure (toJSON asset)
 
 -- | Get the JSON representation of a whitehall asset.
@@ -175,13 +176,40 @@ makeAsset file legacyUrlPath multipartData = liftIO $ do
     , assetLegacyUrlPath = legacyUrlPath
     }
 
--- | Save an asset to disk.
-saveAsset :: MonadIO m => FileData Tmp -> Asset -> m ()
-saveAsset file asset = liftIO $ do
+-- | Save an asset's file to disk and data to mongo.
+saveAsset :: MonadIO m => FileData Tmp -> Asset -> MongoDB.Action m ()
+saveAsset file asset = do
+  saveAssetToDisk file asset
+  saveAssetToMongo asset
+
+-- | Save an asset's file to disk.
+saveAssetToDisk :: MonadIO m => FileData Tmp -> Asset -> m ()
+saveAssetToDisk file asset = liftIO $ do
   let directory   = uploadsBase </> UUID.toString (assetUUID asset)
   let destination = directory </> T.unpack (MP.fdFileName file)
   createDirectoryIfMissing True                directory
   copyFile                 (MP.fdPayload file) destination
+
+-- | Save an asset's data to mongo.
+saveAssetToMongo :: MonadIO m => Asset -> MongoDB.Action m ()
+saveAssetToMongo asset = MongoDB.insert_
+  mongoCollection
+  [ "uuid" =: toUUID (assetUUID asset)
+  , "file" =: assetFile asset
+  , "created_at" =: assetCreatedAt asset
+  , "updated_at" =: assetUpdatedAt asset
+  , "deleted_at" =: assetDeletedAt asset
+    -- this is a difference: asset-manager uses _id, but to keep
+    -- things simple I'm only using one notion of identifier: the
+    -- uuid.
+  , "replacement_uuid" =: toUUID <$> assetReplacement asset
+  , "redirect_url" =: assetRedirectUrl asset
+  , "legacy_url_path" =: assetLegacyUrlPath asset
+  ]
+  where
+    -- holy type conversion, batman!  maybe I should be using the
+    -- MongoDB UUID type, rather than the uuid-types UUID type.
+        toUUID = MongoDB.UUID . UUID.toASCIIBytes
 
 
 -------------------------------------------------------------------------------
@@ -219,3 +247,7 @@ badParams msg =
 -- | Base directory for uploads.
 uploadsBase :: FilePath
 uploadsBase = "/tmp/asset-manager-uploads"
+
+-- | MongoDB collection name.
+mongoCollection :: MongoDB.Collection
+mongoCollection = "assets"
