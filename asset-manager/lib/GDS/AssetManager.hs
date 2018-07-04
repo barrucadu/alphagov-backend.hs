@@ -23,7 +23,7 @@ import           Servant
 import           Servant.Multipart         (FileData, MultipartData, Tmp)
 import qualified Servant.Multipart         as MP
 import           System.Directory          (copyFile, createDirectoryIfMissing)
-import           System.FilePath           (FilePath, takeDirectory, (</>))
+import           System.FilePath           (FilePath, (</>))
 
 import qualified GDS.API.AssetManager      as GDS
 
@@ -59,7 +59,7 @@ upload
 upload _ multipartData = do
   file  <- requireFile "asset[file]" multipartData
   asset <- makeAsset file Nothing multipartData
-  saveFileTo (uploadsBase </> UUID.toString (assetUUID asset)) file
+  saveAsset file asset
   pure (toJSON asset)
 
 -- | Update an asset.
@@ -99,7 +99,7 @@ uploadWhitehall _ multipartData = do
   unless (take 1 legacyUrlPath == "/")
          (badParams "legacy url path should start with '/'")
   asset <- makeAsset file (Just legacyUrlPath) multipartData
-  saveFileTo (uploadsBase </> tail (takeDirectory legacyUrlPath)) file
+  saveAsset file asset
   pure (toJSON asset)
 
 -- | Get the JSON representation of a whitehall asset.
@@ -175,13 +175,10 @@ makeAsset file legacyUrlPath multipartData = liftIO $ do
     , assetLegacyUrlPath = legacyUrlPath
     }
 
-
--------------------------------------------------------------------------------
--- * File uploads
-
--- | Save a file to a directory, keeping its name.
-saveFileTo :: MonadIO m => FilePath -> FileData Tmp -> m ()
-saveFileTo directory file = liftIO $ do
+-- | Save an asset to disk.
+saveAsset :: MonadIO m => FileData Tmp -> Asset -> m ()
+saveAsset file asset = liftIO $ do
+  let directory   = uploadsBase </> UUID.toString (assetUUID asset)
   let destination = directory </> T.unpack (MP.fdFileName file)
   createDirectoryIfMissing True                directory
   copyFile                 (MP.fdPayload file) destination
