@@ -1,0 +1,2 @@
+# I don't think this helps
+- ignore: {name: "Avoid lambda using `infix`"}
