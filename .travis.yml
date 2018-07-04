@@ -13,7 +13,10 @@ addons:
     packages:
     - libgmp-dev
 
+services: mongodb
+
 script:
+- sleep 15 # https://docs.travis-ci.com/user/database-setup/#MongoDB-does-not-immediately-accept-connections
 - ./.travis/$MODE.sh
 
 jobs:
