@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes        #-}
 
@@ -75,7 +76,10 @@ update _ _ _ = throwError err501
 
 -- | Get the JSON representation of an asset.
 retrieve :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
-retrieve _ _ = throwError err501
+retrieve runMongo uuid =
+  runMongo (findAssetInMongo ["uuid" =: toUUID uuid]) >>= \case
+    Just asset -> pure (toJSON asset)
+    Nothing    -> missingFile
 
 -- | Delete an asset.
 delete :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
@@ -107,7 +111,11 @@ uploadWhitehall runMongo multipartData = do
 -- | Get the JSON representation of a whitehall asset.
 retrieveWhitehall
   :: (forall m a . MonadIO m => RunMongo m a) -> [String] -> Handler Value
-retrieveWhitehall _ _ = throwError err501
+retrieveWhitehall runMongo segments =
+  runMongo (findAssetInMongo ["legacy_url_path" =: joinPath ("/" : segments)])
+    >>= \case
+          Just asset -> pure (toJSON asset)
+          Nothing    -> missingFile
 
 -- | Download a whitehall asset.
 downloadWhitehall
@@ -275,6 +283,11 @@ findFile = MP.lookupFile . fromString
 -- | Throw a 422 if a 'Maybe' value isn't present.
 require :: String -> Maybe a -> Handler a
 require msg = maybe (badParams msg) pure
+
+-- | Throw a 404.
+missingFile :: Handler a
+missingFile =
+  throwError err404 { errBody = fromString ("{ \"status\": \"not found\" }") }
 
 -- | Throw a 422 with the given error.
 badParams :: String -> Handler a
