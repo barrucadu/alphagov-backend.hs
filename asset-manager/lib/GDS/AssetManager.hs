@@ -197,14 +197,18 @@ updateAsset :: MonadIO m => Asset -> MultipartData tag -> m Asset
 updateAsset asset multipartData = liftIO $ do
   now <- getCurrentTime
   pure asset
-    { assetReplacement = updateNully
-      UUID.fromString
-      (assetReplacement asset)
-      (findNullyInput "asset[replacement_id]" multipartData)
-    , assetRedirectUrl = updateNully
-      Just
-      (assetRedirectUrl asset)
-      (findNullyInput "asset[redirect_url]" multipartData)
+    { assetReplacement = case
+        findNullyInput "asset[replacement_id]" multipartData
+      of
+        Found str -> UUID.fromString str
+        Nully     -> Nothing
+        Missing   -> assetReplacement asset
+    , assetRedirectUrl = case
+        findNullyInput "asset[redirect_url]" multipartData
+      of
+        Found url -> Just url
+        Nully     -> Nothing
+        Missing   -> assetRedirectUrl asset
     , assetUpdatedAt   = now
     }
 
@@ -355,13 +359,6 @@ findNullyInput input multipartData = case findInput input multipartData of
   Just ""  -> Nully
   Just str -> Found str
   Nothing  -> Missing
-
--- | Update an optional value using a nully input.  If the input is
--- nully, the result is 'Nothing'.
-updateNully :: (String -> Maybe a) -> Maybe a -> NullyInput -> Maybe a
-updateNully f _   (Found str) = f str
-updateNully _ _   Nully       = Nothing
-updateNully _ def _           = def
 
 
 -------------------------------------------------------------------------------
