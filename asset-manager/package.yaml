@@ -21,6 +21,7 @@ ghc-options:
 library:
   source-dirs: lib
   dependencies:
+    - bytestring
     - directory
     - exceptions
     - filepath

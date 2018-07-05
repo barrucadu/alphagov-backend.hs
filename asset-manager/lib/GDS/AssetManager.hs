@@ -7,11 +7,13 @@
 -- | The asset-manager service.
 module GDS.AssetManager where
 
+import           Control.Applicative       ((<|>))
 import           Control.Monad             (unless)
 import           Control.Monad.Catch       (try)
 import           Control.Monad.IO.Class
 import           Data.Aeson                (Value)
 import qualified Data.Aeson                as A
+import qualified Data.ByteString           as B
 import           Data.Char                 (toLower)
 import           Data.Maybe                (fromMaybe)
 import           Data.String               (fromString)
@@ -26,7 +28,7 @@ import           GHC.Generics              (Generic)
 import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.HTTP.Types.Status as HTTP
 import           Network.Mime              (defaultMimeLookup)
-import           Network.Wai               (responseFile, responseLBS)
+import qualified Network.Wai               as W
 import           Servant
 import           Servant.Multipart         (FileData, MultipartData, Tmp)
 import qualified Servant.Multipart         as MP
@@ -248,13 +250,14 @@ saveAssetToDisk file asset = liftIO $ do
 -- | Look up an asset and serve its file from disk.
 serveAssetFromDisk
   :: (forall m a . MonadIO m => RunMongo m a) -> MongoDB.Selector -> Server Raw
-serveAssetFromDisk runMongo sel =
-  Tagged $ \_ respond -> runMongo (findAssetInMongo sel) >>= \case
-    Just asset ->
-      case
+serveAssetFromDisk runMongo sel = Tagged $ \req respond ->
+  runMongo (findAssetInMongo sel) >>= \case
+    Just asset -> if assetDraft asset && not (isDraftHost req)
+      then respond (r302 ("//" ++ draftAssetsHost ++ assetURL asset))
+      else
+        case
           (assetDeletedAt asset, assetRedirectUrl asset, assetReplacement asset)
-        of
-          -- :(
+        of -- :(
           (Just _, _       , _        ) -> respond r404
           (_     , Just url, _        ) -> respond (r301 url)
           (_     , _       , Just uuid) -> do
@@ -265,18 +268,20 @@ serveAssetFromDisk runMongo sel =
           (_, _, _) -> respond (rfile asset)
     Nothing -> respond r404
  where
-  rfile asset = responseFile
+  rfile asset = W.responseFile
     HTTP.ok200
     [(HTTP.hContentType, defaultMimeLookup (fromString (assetFile asset)))]
     (assetFilePath asset)
     Nothing
 
   r301 url =
-    responseLBS HTTP.movedPermanently301 [(HTTP.hLocation, fromString url)] ""
+    W.responseLBS HTTP.movedPermanently301 [(HTTP.hLocation, fromString url)] ""
 
-  r404 = responseLBS HTTP.notFound404
-                     [(HTTP.hContentType, "application/json")]
-                     "{ \"status\": \"not found\" }"
+  r302 url = W.responseLBS HTTP.found302 [(HTTP.hLocation, fromString url)] ""
+
+  r404 = W.responseLBS HTTP.notFound404
+                       [(HTTP.hContentType, "application/json")]
+                       "{ \"status\": \"not found\" }"
 
 -- | Save an asset's data to mongo.
 saveAssetToMongo :: MonadIO m => Asset -> MongoDB.Action m ()
@@ -383,6 +388,14 @@ badParams msg = throwError err422
   { errBody = fromString ("{ \"errors\": [\"" ++ msg ++ "\"] }")
   }
 
+-- | Check if we're on the draft host.
+isDraftHost :: W.Request -> Bool
+isDraftHost req = maybe
+  False
+  (fromString draftAssetsHost `B.isPrefixOf`)
+  (lookup "X-Forwarded-Host" headers <|> lookup "Host" headers)
+  where headers = W.requestHeaders req
+
 -- | Base directory for uploads.
 uploadsBase :: FilePath
 uploadsBase = "/tmp/asset-manager-uploads"
@@ -390,6 +403,10 @@ uploadsBase = "/tmp/asset-manager-uploads"
 -- | MongoDB collection name.
 mongoCollection :: MongoDB.Collection
 mongoCollection = "assets"
+
+-- | Draft assets host.
+draftAssetsHost :: String
+draftAssetsHost = "draft-assets.dev.gov.uk"
 
 -- holy type conversion, batman!  maybe I should be using the MongoDB
 -- UUID type, rather than the uuid-types UUID type.
