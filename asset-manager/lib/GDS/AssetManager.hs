@@ -87,7 +87,13 @@ retrieve runMongo uuid =
 
 -- | Delete an asset.
 delete :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Asset
-delete _ _ = throwError err501
+delete runMongo uuid =
+  runMongo (findAssetInMongo ["uuid" =: toUUID uuid]) >>= \case
+    Just asset -> do
+      new <- deleteAsset asset
+      runMongo (saveAssetToMongo new)
+      pure new
+    Nothing -> missingFile
 
 -- | Restore a deleted asset.
 restore :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Asset
@@ -171,6 +177,14 @@ updateAsset asset multipartData = liftIO $ do
     , assetRedirectUrl = findInput "asset[redirect_url]" multipartData
     , assetUpdatedAt   = now
     }
+
+-- | Mark an asset as deleted.
+--
+-- Deletion and update times are set to now.
+deleteAsset :: MonadIO m => Asset -> m Asset
+deleteAsset asset = liftIO $ do
+  now <- getCurrentTime
+  pure asset { assetUpdatedAt = now, assetDeletedAt = Just now }
 
 -- | Save an asset's file to disk and data to mongo.
 saveAsset :: MonadIO m => FileData Tmp -> Asset -> MongoDB.Action m ()
