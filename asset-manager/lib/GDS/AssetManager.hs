@@ -1,13 +1,18 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | The asset-manager service.
 module GDS.AssetManager where
 
 import           Control.Monad             (unless)
+import           Control.Monad.Catch       (try)
 import           Control.Monad.IO.Class
 import           Data.Aeson                (Value)
+import qualified Data.Aeson                as A
+import           Data.Char                 (toLower)
 import           Data.String               (fromString)
 import qualified Data.Text                 as T
 import           Data.Time.Clock           (getCurrentTime)
@@ -16,6 +21,7 @@ import qualified Data.UUID.Types           as UUID
 import qualified Data.UUID.V4              as UUID
 import           Database.MongoDB          ((=:))
 import qualified Database.MongoDB          as MongoDB
+import           GHC.Generics              (Generic)
 import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.HTTP.Types.Status as HTTP
 import           Network.Mime              (defaultMimeLookup)
@@ -47,7 +53,7 @@ server runMongo =
     :<|> download runMongo
     :<|> retrieveWhitehall runMongo
     :<|> downloadWhitehall runMongo
-    :<|> healthcheck
+    :<|> healthcheck runMongo
 
 
 -------------------------------------------------------------------------------
@@ -141,8 +147,20 @@ downloadWhitehall runMongo segments = serveAssetFromDisk
   ["legacy_url_path" =: joinPath ("/" : "government" : "uploads" : segments)]
 
 -- | Check the health of the application.
-healthcheck :: Handler Value
-healthcheck = throwError err501
+healthcheck :: (forall m a . MonadIO m => RunMongo m a) -> Handler Value
+healthcheck runMongo = do
+  attempt <- try (runMongo MongoDB.allCollections)
+  let toStatus = either (\(_ :: MongoDB.Failure) -> Critical) (const Ok)
+  pure $ A.object ["status" A..= toStatus attempt]
+
+-- | Possible healthcheck statuses.
+data Status = Ok | Critical
+  deriving (Eq, Ord, Read, Show, Enum, Bounded, Generic)
+
+instance A.ToJSON Status where
+  toJSON = A.genericToJSON A.defaultOptions
+    { A.constructorTagModifier = map toLower
+    }
 
 
 -------------------------------------------------------------------------------
