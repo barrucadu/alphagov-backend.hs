@@ -172,9 +172,14 @@ updateAsset :: MonadIO m => Asset -> MultipartData tag -> m Asset
 updateAsset asset multipartData = liftIO $ do
   now <- getCurrentTime
   pure asset
-    { assetReplacement = UUID.fromString
-      =<< findInput "asset[replacement_id]" multipartData
-    , assetRedirectUrl = findInput "asset[redirect_url]" multipartData
+    { assetReplacement = updateNully
+      UUID.fromString
+      (assetReplacement asset)
+      (findNullyInput "asset[replacement_id]" multipartData)
+    , assetRedirectUrl = updateNully
+      Just
+      (assetRedirectUrl asset)
+      (findNullyInput "asset[redirect_url]" multipartData)
     , assetUpdatedAt   = now
     }
 
@@ -203,18 +208,35 @@ saveAssetToDisk file asset = liftIO $ do
 -- | Look up an asset and serve its file from disk.
 serveAssetFromDisk
   :: (forall m a . MonadIO m => RunMongo m a) -> MongoDB.Selector -> Server Raw
-serveAssetFromDisk runMongo sel = Tagged $ \_ respond -> do
-  masset <- runMongo (findAssetInMongo sel)
-  respond $ case masset of
-    -- todo: access control
-    Just asset -> responseFile
-      HTTP.ok200
-      [(HTTP.hContentType, defaultMimeLookup (fromString (assetFile asset)))]
-      (assetFilePath asset)
-      Nothing
-    Nothing -> responseLBS HTTP.notFound404
-                           [(HTTP.hContentType, "application/json")]
-                           "{ \"status\": \"not found\" }"
+serveAssetFromDisk runMongo sel =
+  Tagged $ \_ respond -> runMongo (findAssetInMongo sel) >>= \case
+    Just asset ->
+      case
+          (assetDeletedAt asset, assetRedirectUrl asset, assetReplacement asset)
+        of
+          -- :(
+          (Just _, _       , _        ) -> respond r404
+          (_     , Just url, _        ) -> respond (r301 url)
+          (_     , _       , Just uuid) -> do
+            redirect <- runMongo (findAssetInMongo ["uuid" =: toUUID uuid])
+            respond $ case redirect of
+              Just target -> r301 (assetURL target)
+              Nothing     -> r404
+          (_, _, _) -> respond (rfile asset)
+    Nothing -> respond r404
+ where
+  rfile asset = responseFile
+    HTTP.ok200
+    [(HTTP.hContentType, defaultMimeLookup (fromString (assetFile asset)))]
+    (assetFilePath asset)
+    Nothing
+
+  r301 url =
+    responseLBS HTTP.movedPermanently301 [(HTTP.hLocation, fromString url)] ""
+
+  r404 = responseLBS HTTP.notFound404
+                     [(HTTP.hContentType, "application/json")]
+                     "{ \"status\": \"not found\" }"
 
 -- | Save an asset's data to mongo.
 saveAssetToMongo :: MonadIO m => Asset -> MongoDB.Action m ()
@@ -252,6 +274,14 @@ findAssetInMongo sel = do
       <*> pure (MongoDB.lookup "redirect_url" doc)
       <*> pure (MongoDB.lookup "legacy_url_path" doc)
 
+-- | The public URL of an asset.  For a whitehall asset this is the
+-- legacy URL path, even though the new-style URL will also work.
+assetURL :: Asset -> String
+assetURL asset = case assetLegacyUrlPath asset of
+  Just legacyUrlPath -> legacyUrlPath
+  Nothing ->
+    "/media/" ++ UUID.toString (assetUUID asset) ++ "/" ++ assetFile asset
+
 -- | Get the path of an asset on disk.
 assetFilePath :: Asset -> FilePath
 assetFilePath asset =
@@ -276,6 +306,30 @@ requireFile input = require ("expected a " ++ input) . findFile input
 -- | Finds the file.
 findFile :: String -> MultipartData tag -> Maybe (FileData tag)
 findFile = MP.lookupFile . fromString
+
+-- | Result of 'findNullyInput'.
+data NullyInput
+  = Found String
+  -- ^ Input exists, and has a nonempty value.
+  | Nully
+  -- ^ Input exists, and has an empty value
+  | Missing
+  -- ^ Input doesn't exist.
+  deriving (Eq, Ord, Read, Show)
+
+-- | Find an input, handling nully values properly.
+findNullyInput :: String -> MultipartData tag -> NullyInput
+findNullyInput input multipartData = case findInput input multipartData of
+  Just ""  -> Nully
+  Just str -> Found str
+  Nothing  -> Missing
+
+-- | Update an optional value using a nully input.  If the input is
+-- nully, the result is 'Nothing'.
+updateNully :: (String -> Maybe a) -> Maybe a -> NullyInput -> Maybe a
+updateNully f _   (Found str) = f str
+updateNully _ _   Nully       = Nothing
+updateNully _ def _           = def
 
 
 -------------------------------------------------------------------------------
