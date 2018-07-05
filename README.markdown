@@ -40,6 +40,13 @@ Or directly:
     $ ./.stack-work/install/x86_64-linux/lts-11.15/8.2.2/bin/$SERVICE-test
 
 
+Scope
+-----
+
+This is just a toy, so I don't bother implementing security-related
+things like **users**, **access protection**, or **virus scanning**.
+
+
 Running in the VM
 -----------------
 
