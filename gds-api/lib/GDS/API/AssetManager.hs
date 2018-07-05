@@ -8,7 +8,9 @@ module GDS.API.AssetManager where
 import           Data.Aeson                (FromJSON, Object, ToJSON, Value)
 import qualified Data.Aeson                as A
 import qualified Data.HashMap.Strict       as M
+import           Data.Maybe                (isJust)
 import           Data.Proxy                (Proxy (..))
+import           Data.Semigroup            ((<>))
 import           Data.String               (fromString)
 import           Data.Time.Clock           (UTCTime)
 import           Data.UUID.Types           (UUID)
@@ -81,10 +83,13 @@ instance FromJSON Asset where
 
 instance ToJSON Asset where
   toJSON asset     =
-    -- needs an "id" field which is the url
+    -- needs some extra fields, i'm actually not sure if the generic
+    -- json serialisation is useful here or if I should just do it
+    -- myself... but it does get us free deserialisation.
     let url = "/assets/" ++ UUID.toString (assetUUID asset)
+        isDeleted = isJust (assetDeletedAt asset)
         A.Object obj = A.genericToJSON assetJsonOptions asset
-    in A.Object (M.insert "id" (A.toJSON url) obj)
+    in A.Object (M.fromList [("id", A.toJSON url), ("deleted", A.toJSON isDeleted)] <> obj)
 
 -- | Strip the \"asset\" prefix and turn CamelCase into snake_case.
 assetJsonOptions :: A.Options
