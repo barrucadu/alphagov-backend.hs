@@ -70,7 +70,13 @@ update
   -> UUID
   -> MultipartData Tmp
   -> Handler Asset
-update _ _ _ = throwError err501
+update runMongo uuid multipartData =
+  runMongo (findAssetInMongo ["uuid" =: toUUID uuid]) >>= \case
+    Just asset -> do
+      new <- updateAsset asset multipartData
+      runMongo (saveAssetToMongo new)
+      pure new
+    Nothing -> missingFile
 
 -- | Get the JSON representation of an asset.
 retrieve :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Asset
@@ -140,16 +146,30 @@ makeAsset
 makeAsset file legacyUrlPath multipartData = liftIO $ do
   uuid <- UUID.nextRandom
   now  <- getCurrentTime
-  pure Asset
-    { assetUUID          = uuid
-    , assetFile          = T.unpack (MP.fdFileName file)
-    , assetCreatedAt     = now
-    , assetUpdatedAt     = now
-    , assetDeletedAt     = Nothing
-    , assetReplacement   = UUID.fromString
+  let asset = Asset
+        { assetUUID          = uuid
+        , assetFile          = T.unpack (MP.fdFileName file)
+        , assetCreatedAt     = now
+        , assetUpdatedAt     = now
+        , assetDeletedAt     = Nothing
+        , assetReplacement   = Nothing
+        , assetRedirectUrl   = Nothing
+        , assetLegacyUrlPath = legacyUrlPath
+        }
+  updateAsset asset multipartData
+
+-- | Update an asset by loading the replacement UUID and redirect URL
+-- from the given @MultipartData@.
+--
+-- Update time is set to now.
+updateAsset :: MonadIO m => Asset -> MultipartData tag -> m Asset
+updateAsset asset multipartData = liftIO $ do
+  now <- getCurrentTime
+  pure asset
+    { assetReplacement = UUID.fromString
       =<< findInput "asset[replacement_id]" multipartData
-    , assetRedirectUrl   = findInput "asset[redirect_url]" multipartData
-    , assetLegacyUrlPath = legacyUrlPath
+    , assetRedirectUrl = findInput "asset[redirect_url]" multipartData
+    , assetUpdatedAt   = now
     }
 
 -- | Save an asset's file to disk and data to mongo.
@@ -184,9 +204,9 @@ serveAssetFromDisk runMongo sel = Tagged $ \_ respond -> do
 
 -- | Save an asset's data to mongo.
 saveAssetToMongo :: MonadIO m => Asset -> MongoDB.Action m ()
-saveAssetToMongo asset = MongoDB.insert_
-  mongoCollection
-  [ "uuid" =: toUUID (assetUUID asset)
+saveAssetToMongo asset = MongoDB.upsert
+  (MongoDB.select ["uuid" =: uuid] mongoCollection)
+  [ "uuid" =: uuid
   , "file" =: assetFile asset
   , "created_at" =: assetCreatedAt asset
   , "updated_at" =: assetUpdatedAt asset
@@ -198,6 +218,7 @@ saveAssetToMongo asset = MongoDB.insert_
   , "redirect_url" =: assetRedirectUrl asset
   , "legacy_url_path" =: assetLegacyUrlPath asset
   ]
+  where uuid = toUUID (assetUUID asset)
 
 -- | Find an asset by selector.
 findAssetInMongo
