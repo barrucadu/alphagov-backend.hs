@@ -183,6 +183,7 @@ makeAsset file legacyUrlPath multipartData = liftIO $ do
         , assetCreatedAt     = now
         , assetUpdatedAt     = now
         , assetDeletedAt     = Nothing
+        , assetDraft         = False
         , assetReplacement   = Nothing
         , assetRedirectUrl   = Nothing
         , assetLegacyUrlPath = legacyUrlPath
@@ -195,20 +196,22 @@ makeAsset file legacyUrlPath multipartData = liftIO $ do
 -- Update time is set to now.
 updateAsset :: MonadIO m => Asset -> MultipartData tag -> m Asset
 updateAsset asset multipartData = liftIO $ do
+  let input i = findNullyInput ("asset[" ++ i ++ "]") multipartData
   now <- getCurrentTime
   pure asset
-    { assetReplacement = case
-        findNullyInput "asset[replacement_id]" multipartData
-      of
-        Found str -> UUID.fromString str
-        Nully     -> Nothing
-        Missing   -> assetReplacement asset
-    , assetRedirectUrl = case
-        findNullyInput "asset[redirect_url]" multipartData
-      of
-        Found url -> Just url
-        Nully     -> Nothing
-        Missing   -> assetRedirectUrl asset
+    { assetReplacement = case input "replacement_id" of
+      Found str -> UUID.fromString str
+      Nully     -> Nothing
+      Missing   -> assetReplacement asset
+    , assetRedirectUrl = case input "redirect_url" of
+      Found url -> Just url
+      Nully     -> Nothing
+      Missing   -> assetRedirectUrl asset
+    , assetDraft       = case input "draft" of
+      Found "true" -> True
+      Found _      -> False
+      Nully        -> False
+      Missing      -> assetDraft asset
     , assetUpdatedAt   = now
     }
 
@@ -287,6 +290,7 @@ saveAssetToMongo asset = MongoDB.upsert
     -- this is a difference: asset-manager uses _id, but to keep
     -- things simple I'm only using one notion of identifier: the
     -- uuid.
+  , "draft" =: assetDraft asset
   , "replacement_uuid" =: toUUID <$> assetReplacement asset
   , "redirect_url" =: assetRedirectUrl asset
   , "legacy_url_path" =: assetLegacyUrlPath asset
@@ -307,6 +311,7 @@ findAssetInMongo sel = do
       <*> MongoDB.lookup "created_at" doc
       <*> MongoDB.lookup "updated_at" doc
       <*> pure (MongoDB.lookup "deleted_at" doc)
+      <*> MongoDB.lookup "draft" doc
       <*> pure (fromUUID =<< MongoDB.lookup "replacement_uuid" doc)
       <*> pure (MongoDB.lookup "redirect_url" doc)
       <*> pure (MongoDB.lookup "legacy_url_path" doc)

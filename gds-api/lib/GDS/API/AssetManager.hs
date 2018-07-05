@@ -58,7 +58,7 @@ nonUploadAPI = Proxy
 
 -- | An asset: either normal or whitehall.
 --
--- Doesn't currently have: state, filename history, draft, etag, last
+-- Doesn't currently have: state, filename history, etag, last
 -- modified (what's the difference between that and updated?), md5
 -- digest, size, access limited, parent document url.
 --
@@ -72,6 +72,7 @@ data Asset = Asset
   , assetUpdatedAt     :: UTCTime
   -- ^ On creation, this is the created time.
   , assetDeletedAt     :: Maybe UTCTime
+  , assetDraft         :: Bool
   , assetReplacement   :: Maybe UUID
   , assetRedirectUrl   :: Maybe String
   , assetLegacyUrlPath :: Maybe String
