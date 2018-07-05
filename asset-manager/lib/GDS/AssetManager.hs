@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes        #-}
@@ -8,17 +7,15 @@ module GDS.AssetManager where
 
 import           Control.Monad             (unless)
 import           Control.Monad.IO.Class
-import           Data.Aeson                (ToJSON, Value, toJSON)
-import qualified Data.Aeson                as A
+import           Data.Aeson                (Value)
 import           Data.String               (fromString)
 import qualified Data.Text                 as T
-import           Data.Time.Clock           (UTCTime, getCurrentTime)
+import           Data.Time.Clock           (getCurrentTime)
 import           Data.UUID.Types           (UUID)
 import qualified Data.UUID.Types           as UUID
 import qualified Data.UUID.V4              as UUID
 import           Database.MongoDB          ((=:))
 import qualified Database.MongoDB          as MongoDB
-import           GHC.Generics              (Generic)
 import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.HTTP.Types.Status as HTTP
 import           Network.Mime              (defaultMimeLookup)
@@ -29,6 +26,7 @@ import qualified Servant.Multipart         as MP
 import           System.Directory          (copyFile, createDirectoryIfMissing)
 import           System.FilePath           (FilePath, joinPath, takeDirectory)
 
+import           GDS.API.AssetManager      (Asset (..))
 import qualified GDS.API.AssetManager      as GDS
 
 
@@ -59,34 +57,34 @@ server runMongo =
 upload
   :: (forall m a . MonadIO m => RunMongo m a)
   -> MultipartData Tmp
-  -> Handler Value
+  -> Handler Asset
 upload runMongo multipartData = do
   file  <- requireFile "asset[file]" multipartData
   asset <- makeAsset file Nothing multipartData
   runMongo (saveAsset file asset)
-  pure (toJSON asset)
+  pure asset
 
 -- | Update an asset.
 update
   :: (forall m a . MonadIO m => RunMongo m a)
   -> UUID
   -> MultipartData Tmp
-  -> Handler Value
+  -> Handler Asset
 update _ _ _ = throwError err501
 
 -- | Get the JSON representation of an asset.
-retrieve :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
+retrieve :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Asset
 retrieve runMongo uuid =
   runMongo (findAssetInMongo ["uuid" =: toUUID uuid]) >>= \case
-    Just asset -> pure (toJSON asset)
+    Just asset -> pure asset
     Nothing    -> missingFile
 
 -- | Delete an asset.
-delete :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
+delete :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Asset
 delete _ _ = throwError err501
 
 -- | Restore a deleted asset.
-restore :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Value
+restore :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Asset
 restore _ _ = throwError err501
 
 -- | Download an asset.
@@ -98,7 +96,7 @@ download runMongo uuid _ = serveAssetFromDisk runMongo ["uuid" =: toUUID uuid]
 uploadWhitehall
   :: (forall m a . MonadIO m => RunMongo m a)
   -> MultipartData Tmp
-  -> Handler Value
+  -> Handler Asset
 uploadWhitehall runMongo multipartData = do
   legacyUrlPath <- requireInput "asset[legacy_url_path]" multipartData
   file          <- requireFile "asset[file]" multipartData
@@ -106,15 +104,15 @@ uploadWhitehall runMongo multipartData = do
          (badParams "legacy url path should start with '/'")
   asset <- makeAsset file (Just legacyUrlPath) multipartData
   runMongo (saveAsset file asset)
-  pure (toJSON asset)
+  pure asset
 
 -- | Get the JSON representation of a whitehall asset.
 retrieveWhitehall
-  :: (forall m a . MonadIO m => RunMongo m a) -> [String] -> Handler Value
+  :: (forall m a . MonadIO m => RunMongo m a) -> [String] -> Handler Asset
 retrieveWhitehall runMongo segments =
   runMongo (findAssetInMongo ["legacy_url_path" =: joinPath ("/" : segments)])
     >>= \case
-          Just asset -> pure (toJSON asset)
+          Just asset -> pure asset
           Nothing    -> missingFile
 
 -- | Download a whitehall asset.
@@ -131,38 +129,6 @@ healthcheck = throwError err501
 
 -------------------------------------------------------------------------------
 -- * Assets
-
--- | An asset: either normal or whitehall.
---
--- Doesn't currently have: state, filename history, draft, etag, last
--- modified (what's the difference between that and updated?), md5
--- digest, size, access limited, parent document url.
---
--- Whitehall assets don't currently have: legacy etag, legacy last
--- modified.
-data Asset = Asset
-  { assetUUID          :: UUID
-  , assetFile          :: FilePath
-  -- ^ Just the name, not the full path.
-  , assetCreatedAt     :: UTCTime
-  , assetUpdatedAt     :: UTCTime
-  -- ^ On creation, this is the created time.
-  , assetDeletedAt     :: Maybe UTCTime
-  , assetReplacement   :: Maybe UUID
-  , assetRedirectUrl   :: Maybe String
-  , assetLegacyUrlPath :: Maybe String
-  -- ^ If this is present, it's a whitehall asset.
-  } deriving (Eq, Ord, Read, Show, Generic)
-
-instance ToJSON Asset where
-  toJSON     = A.genericToJSON assetJsonOptions
-  toEncoding = A.genericToEncoding assetJsonOptions
-
--- | Strip the \"asset\" prefix and turn CamelCase into snake_case.
-assetJsonOptions :: A.Options
-assetJsonOptions = A.defaultOptions
-  { A.fieldLabelModifier = A.camelTo2 '_' . drop (length ("asset" :: String))
-  }
 
 -- | Make an asset, loading the replacement and redirect URL from the
 -- given @MultipartData@.

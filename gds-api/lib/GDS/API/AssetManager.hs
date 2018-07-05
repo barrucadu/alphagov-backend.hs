@@ -1,14 +1,18 @@
 {-# LANGUAGE DataKinds     #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeOperators #-}
 
 module GDS.API.AssetManager where
 
-import           Data.Aeson                (Object, Value, toJSON)
+import           Data.Aeson                (FromJSON, Object, ToJSON, Value)
+import qualified Data.Aeson                as A
 import qualified Data.HashMap.Strict       as M
 import           Data.Proxy                (Proxy (..))
 import           Data.String               (fromString)
+import           Data.Time.Clock           (UTCTime)
 import           Data.UUID.Types           (UUID)
 import qualified Data.UUID.Types           as UUID
+import           GHC.Generics              (Generic)
 import qualified Network.HTTP.Types.Method as HTTP
 import           Servant.API
 import           Servant.Client            (ClientM, Response, client)
@@ -20,9 +24,9 @@ import           Servant.Multipart
 
 -- | The asset-manager service: stores files and associated metadata.
 type API =
-  ("assets" :> MultipartForm Tmp (MultipartData Tmp) :> Post '[JSON] Value)
-  :<|> ("assets" :> Capture "id" UUID :> MultipartForm Tmp (MultipartData Tmp) :> Put '[JSON] Value)
-  :<|> ("whitehall_assets" :> MultipartForm Tmp (MultipartData Tmp) :> Post '[JSON] Value)
+  ("assets" :> MultipartForm Tmp (MultipartData Tmp) :> Post '[JSON] Asset)
+  :<|> ("assets" :> Capture "id" UUID :> MultipartForm Tmp (MultipartData Tmp) :> Put '[JSON] Asset)
+  :<|> ("whitehall_assets" :> MultipartForm Tmp (MultipartData Tmp) :> Post '[JSON] Asset)
   :<|> NonUploadAPI
 
 -- | Boilerplate.
@@ -33,11 +37,11 @@ api = Proxy
 -- limitation in servant, we can only automatically generate the API
 -- client for this part.
 type NonUploadAPI =
-  ("assets" :> Capture "id" UUID :> Get '[JSON] Value)
-  :<|> ("assets" :> Capture "id" UUID :> Delete '[JSON] Value)
-  :<|> ("assets" :> Capture "id" UUID :> "restore" :> Post '[JSON] Value)
+  ("assets" :> Capture "id" UUID :> Get '[JSON] Asset)
+  :<|> ("assets" :> Capture "id" UUID :> Delete '[JSON] Asset)
+  :<|> ("assets" :> Capture "id" UUID :> "restore" :> Post '[JSON] Asset)
   :<|> ("media" :> Capture "id" UUID :> Capture "name" String :> Raw)
-  :<|> ("whitehall_assets" :> CaptureAll "path" String :> Get '[JSON] Value)
+  :<|> ("whitehall_assets" :> CaptureAll "path" String :> Get '[JSON] Asset)
   :<|> ("government" :> "uploads" :> CaptureAll "path" String :> Raw)
   :<|> ("healthcheck" :> Get '[JSON] Value)
 
@@ -47,39 +51,78 @@ nonUploadAPI = Proxy
 
 
 -------------------------------------------------------------------------------
+-- * Assets
+
+-- | An asset: either normal or whitehall.
+--
+-- Doesn't currently have: state, filename history, draft, etag, last
+-- modified (what's the difference between that and updated?), md5
+-- digest, size, access limited, parent document url.
+--
+-- Whitehall assets don't currently have: legacy etag, legacy last
+-- modified.
+data Asset = Asset
+  { assetUUID          :: UUID
+  , assetFile          :: FilePath
+  -- ^ Just the name, not the full path.
+  , assetCreatedAt     :: UTCTime
+  , assetUpdatedAt     :: UTCTime
+  -- ^ On creation, this is the created time.
+  , assetDeletedAt     :: Maybe UTCTime
+  , assetReplacement   :: Maybe UUID
+  , assetRedirectUrl   :: Maybe String
+  , assetLegacyUrlPath :: Maybe String
+  -- ^ If this is present, it's a whitehall asset.
+  } deriving (Eq, Ord, Read, Show, Generic)
+
+instance FromJSON Asset where
+  parseJSON = A.genericParseJSON assetJsonOptions
+
+instance ToJSON Asset where
+  toJSON     = A.genericToJSON assetJsonOptions
+  toEncoding = A.genericToEncoding assetJsonOptions
+
+-- | Strip the \"asset\" prefix and turn CamelCase into snake_case.
+assetJsonOptions :: A.Options
+assetJsonOptions = A.defaultOptions
+  { A.fieldLabelModifier = A.camelTo2 '_' . drop (length ("asset" :: String))
+  }
+
+
+-------------------------------------------------------------------------------
 -- * Client
 
 -- | All handlers other than @/media@, @/government@, and
 -- @/healthcheck@ return the JSON representation of the asset.
 
 -- | Upload a new asset.
-upload :: FilePath -> Object -> ClientM Value
+upload :: FilePath -> Object -> ClientM Asset
 upload = multipartHelper HTTP.methodPost "assets" . Just
 
 -- | Upload a new whitehall asset.
-uploadWhitehall :: FilePath -> String -> Object -> ClientM Value
+uploadWhitehall :: FilePath -> String -> Object -> ClientM Asset
 uploadWhitehall filepath legacyUrlPath =
   multipartHelper HTTP.methodPost "whitehall_assets" (Just filepath)
-    . M.insert (fromString "legacy_url_path") (toJSON legacyUrlPath)
+    . M.insert (fromString "legacy_url_path") (A.toJSON legacyUrlPath)
 
 -- | Update an asset.
-update :: UUID -> Maybe FilePath -> Object -> ClientM Value
+update :: UUID -> Maybe FilePath -> Object -> ClientM Asset
 update uuid = multipartHelper HTTP.methodPut ("assets/" ++ UUID.toString uuid)
 
 -- | Get the JSON representation of an asset.
-retrieve :: UUID -> ClientM Value
+retrieve :: UUID -> ClientM Asset
 
 -- | Delete an asset.
-delete :: UUID -> ClientM Value
+delete :: UUID -> ClientM Asset
 
 -- | Restore a deleted asset.
-restore :: UUID -> ClientM Value
+restore :: UUID -> ClientM Asset
 
 -- | Download an asset.
 download :: UUID -> String -> ClientM Response
 
 -- | Get the JSON representation of a whitehall asset.
-retrieveWhitehall :: [String] -> ClientM Value
+retrieveWhitehall :: [String] -> ClientM Asset
 
 -- | Download a whitehall asset.
 downloadWhitehall :: [String] -> ClientM Response
@@ -106,5 +149,5 @@ multipartHelper
   -> String -- ^ Base path
   -> Maybe FilePath -- ^ File to upload
   -> Object -- ^ Attributes to send
-  -> ClientM Value
+  -> ClientM Asset
 multipartHelper _ _ _ _ = error "unimplemented"
