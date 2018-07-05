@@ -2,8 +2,6 @@
 
 source .travis/setup.sh
 
-$stack build
-
 curl -sL https://raw.github.com/ndmitchell/hlint/master/misc/travis.sh | sh -s .
 
 $stack install brittany stylish-haskell
