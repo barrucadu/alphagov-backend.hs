@@ -373,8 +373,7 @@ require msg = maybe (badParams msg) pure
 
 -- | Throw a 404.
 missingFile :: Handler a
-missingFile =
-  throwError err404 { errBody = fromString ("{ \"status\": \"not found\" }") }
+missingFile = throwError err404 { errBody = "{ \"status\": \"not found\" }" }
 
 -- | Throw a 422 with the given error.
 badParams :: String -> Handler a
