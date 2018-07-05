@@ -13,6 +13,7 @@ import           Control.Monad.IO.Class
 import           Data.Aeson                (Value)
 import qualified Data.Aeson                as A
 import           Data.Char                 (toLower)
+import           Data.Maybe                (fromMaybe)
 import           Data.String               (fromString)
 import qualified Data.Text                 as T
 import           Data.Time.Clock           (getCurrentTime)
@@ -309,10 +310,9 @@ findAssetInMongo sel = do
 -- | The public URL of an asset.  For a whitehall asset this is the
 -- legacy URL path, even though the new-style URL will also work.
 assetURL :: Asset -> String
-assetURL asset = case assetLegacyUrlPath asset of
-  Just legacyUrlPath -> legacyUrlPath
-  Nothing ->
-    "/media/" ++ UUID.toString (assetUUID asset) ++ "/" ++ assetFile asset
+assetURL asset = fromMaybe def (assetLegacyUrlPath asset)
+ where
+  def = "/media/" ++ UUID.toString (assetUUID asset) ++ "/" ++ assetFile asset
 
 -- | Get the path of an asset on disk.
 assetFilePath :: Asset -> FilePath
