@@ -97,7 +97,13 @@ delete runMongo uuid =
 
 -- | Restore a deleted asset.
 restore :: (forall m a . MonadIO m => RunMongo m a) -> UUID -> Handler Asset
-restore _ _ = throwError err501
+restore runMongo uuid =
+  runMongo (findAssetInMongo ["uuid" =: toUUID uuid]) >>= \case
+    Just asset -> do
+      new <- undeleteAsset asset
+      runMongo (saveAssetToMongo new)
+      pure new
+    Nothing -> missingFile
 
 -- | Download an asset.
 download
@@ -190,6 +196,14 @@ deleteAsset :: MonadIO m => Asset -> m Asset
 deleteAsset asset = liftIO $ do
   now <- getCurrentTime
   pure asset { assetUpdatedAt = now, assetDeletedAt = Just now }
+
+-- | Mark an asset as not deleted.
+--
+-- Update time are set to now.
+undeleteAsset :: MonadIO m => Asset -> m Asset
+undeleteAsset asset = liftIO $ do
+  now <- getCurrentTime
+  pure asset { assetUpdatedAt = now, assetDeletedAt = Nothing }
 
 -- | Save an asset's file to disk and data to mongo.
 saveAsset :: MonadIO m => FileData Tmp -> Asset -> MongoDB.Action m ()
