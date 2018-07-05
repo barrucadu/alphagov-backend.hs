@@ -1,6 +1,7 @@
-{-# LANGUAGE DataKinds     #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators     #-}
 
 module GDS.API.AssetManager where
 
@@ -79,8 +80,11 @@ instance FromJSON Asset where
   parseJSON = A.genericParseJSON assetJsonOptions
 
 instance ToJSON Asset where
-  toJSON     = A.genericToJSON assetJsonOptions
-  toEncoding = A.genericToEncoding assetJsonOptions
+  toJSON asset     =
+    -- needs an "id" field which is the url
+    let url = "/assets/" ++ UUID.toString (assetUUID asset)
+        A.Object obj = A.genericToJSON assetJsonOptions asset
+    in A.Object (M.insert "id" (A.toJSON url) obj)
 
 -- | Strip the \"asset\" prefix and turn CamelCase into snake_case.
 assetJsonOptions :: A.Options
